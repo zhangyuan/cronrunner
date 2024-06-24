@@ -11,6 +11,9 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/robfig/cron/v3"
 )
 
@@ -18,26 +21,24 @@ const NOT_STARTED = "NOT_STARTED"
 const CREATED = "CREATED"
 const RUNNING = "RUNNING"
 const FAILED = "FAILED"
-const SUCCESSFUL = "SUCCESSFUL"
+const SUCCEEDED = "SUCCESSFUL"
 
 type Job struct {
-	Id                 string
-	Command            string
-	Spec               string
-	LastRunStatus      string
-	Args               []string
-	LastRun            *JobRun
-	SuccessfulRunCount int
-	FailedRunCount     int
+	Id                   string
+	Command              string
+	Spec                 string
+	Args                 []string
+	LastRun              *JobRun
+	JobRunCountSucceeded int
+	JobRunCountFailed    int
 }
 
 func NewJob(conf *conf.JobConfig) *Job {
 	return &Job{
-		Id:            conf.Id,
-		Command:       conf.Command,
-		Spec:          conf.Spec,
-		Args:          conf.Args,
-		LastRunStatus: NOT_STARTED,
+		Id:      conf.Id,
+		Command: conf.Command,
+		Spec:    conf.Spec,
+		Args:    conf.Args,
 	}
 }
 
@@ -48,7 +49,6 @@ type JobRun struct {
 	Duration         int64
 	StartTime        time.Time
 	EndTime          time.Time
-	Error            error `json:"Error,omitempty`
 	StdOutFilePath   string
 	StdErrorFilePath string
 }
@@ -70,7 +70,7 @@ func (jobRun *JobRun) Run() error {
 	if err != nil {
 		jobRun.Status = FAILED
 	} else {
-		jobRun.Status = SUCCESSFUL
+		jobRun.Status = SUCCEEDED
 	}
 	jobRun.EndTime = time.Now()
 	jobRun.Duration = jobRun.EndTime.Sub(jobRun.StartTime).Milliseconds()
@@ -175,48 +175,61 @@ func Invoke(configPath string, bindAddress string) error {
 		job := NewJob(&conf.Jobs[idx])
 		jobs = append(jobs, job)
 
+		measurementNamePrefix := "cronrunner"
+		jobRunTotal := promauto.NewCounter(prometheus.CounterOpts{
+			Name: fmt.Sprintf("%s_%s_job_run_total", measurementNamePrefix, job.Id),
+		})
+
+		jobRunSucceeded := promauto.NewCounter(prometheus.CounterOpts{
+			Name: fmt.Sprintf("%s_%s_job_run_succeeded", measurementNamePrefix, job.Id),
+		})
+
+		jobRunFailed := promauto.NewCounter(prometheus.CounterOpts{
+			Name: fmt.Sprintf("%s_%s_job_run_failed", measurementNamePrefix, job.Id),
+		})
+
 		if _, err := c.AddFunc(job.Spec, func() {
-			if err := appLogFunc("%s\t%s\tSTART\n", time.Now(), job.Id); err != nil {
+			jobRunTotal.Inc()
+			var run = func() error {
+				if err := appLogFunc("%s\t%s\tSTART\n", time.Now(), job.Id); err != nil {
+					return err
+				}
+				if err := appLogFile.Sync(); err != nil {
+					return err
+				}
+
+				jobLogDir := filepath.Join(logBaseDir, job.Id)
+
+				if err := os.MkdirAll(jobLogDir, os.ModePerm); err != nil {
+					return err
+				}
+
+				fileName := time.Now().Format(time.RFC3339)
+				stdoutFilePath := filepath.Join(jobLogDir, fmt.Sprintf("%s-%s.stdout.txt", job.Id, fileName))
+				stderrFilePath := filepath.Join(jobLogDir, fmt.Sprintf("%s-%s.stderr.txt", job.Id, fileName))
+
+				jobRun := NewJobRun(job, stdoutFilePath, stderrFilePath)
+				job.LastRun = jobRun
+				if err := jobRun.Run(); err != nil {
+					return err
+				}
+
+				if err := appLogFunc("%s\t%s\tLastRunStatus=%s\n", time.Now(), job.Id, SUCCEEDED); err != nil {
+					return err
+				}
+
+				if err := appLogFile.Sync(); err != nil {
+					return err
+				}
+				return nil
+			}
+			if err := run(); err != nil {
+				jobRunFailed.Inc()
+				job.JobRunCountFailed += 1
 				logError("%s\t%s\t%s", time.Now(), job.Id, err.Error())
-				return
 			}
-			if err := appLogFile.Sync(); err != nil {
-				logError("%s\t%s\tError=%s", time.Now(), job.Id, err.Error())
-				return
-			}
-
-			jobLogDir := filepath.Join(logBaseDir, job.Id)
-
-			if err := os.MkdirAll(jobLogDir, os.ModePerm); err != nil {
-				logError("%s\t%s\tError=%s", time.Now(), job.Id, err.Error())
-				return
-			}
-
-			fileName := time.Now().Format(time.RFC3339)
-			stdoutFilePath := filepath.Join(jobLogDir, fmt.Sprintf("%s-%s.stdout.txt", job.Id, fileName))
-			stderrFilePath := filepath.Join(jobLogDir, fmt.Sprintf("%s-%s.stderr.txt", job.Id, fileName))
-
-			jobRun := NewJobRun(job, stdoutFilePath, stderrFilePath)
-			job.LastRun = jobRun
-			job.LastRunStatus = RUNNING
-			if err := jobRun.Run(); err != nil {
-				logError("%s\t%s\tError=%s", time.Now(), job.Id, err.Error())
-				job.LastRunStatus = FAILED
-				job.FailedRunCount += 1
-			} else {
-				job.LastRunStatus = SUCCESSFUL
-				job.SuccessfulRunCount += 1
-			}
-
-			if err := appLogFunc("%s\t%s\tLastRunStatus=%s\n", time.Now(), job.Id, job.LastRunStatus); err != nil {
-				logError("%s\t%s\tError=%s", time.Now(), job.Id, err.Error())
-				return
-			}
-
-			if err := appLogFile.Sync(); err != nil {
-				logError("%s\t%s\tError=%s", time.Now(), job.Id, err.Error())
-				return
-			}
+			jobRunSucceeded.Inc()
+			job.JobRunCountSucceeded += 1
 		}); err != nil {
 			return err
 		}
@@ -231,6 +244,10 @@ func Invoke(configPath string, bindAddress string) error {
 		})
 		r.GET("/jobs", func(ctx *gin.Context) {
 			ctx.JSON(200, jobs)
+		})
+
+		r.GET("/metrics", func(ctx *gin.Context) {
+			promhttp.Handler().ServeHTTP(ctx.Writer, ctx.Request)
 		})
 
 		if err := r.Run(bindAddress); err != nil {
