@@ -7,15 +7,17 @@ import (
 )
 
 type JobConfig struct {
-	Id      string   `yaml:"id"`
-	Command string   `yaml:"command"`
-	Spec    string   `yaml:"spec"`
-	Args    []string `yaml:"args"`
+	Id         string   `yaml:"id"`
+	Command    string   `yaml:"command"`
+	WorkingDir string   `yaml:"working_dir"`
+	Spec       string   `yaml:"spec"`
+	Env        []string `yaml:"env"`
 }
 
 type Configuration struct {
-	Jobs   []JobConfig `yaml:"jobs"`
 	LogDir string      `yaml:"log_dir"`
+	Jobs   []JobConfig `yaml:"jobs"`
+	Shell  string      `yaml:"shell"`
 }
 
 func LoadFromYAML[T any](path string) (*T, error) {
