@@ -16,8 +16,8 @@ type JobConfig struct {
 
 type Configuration struct {
 	LogDir string      `yaml:"log_dir"`
-	Jobs   []JobConfig `yaml:"jobs"`
 	Shell  string      `yaml:"shell"`
+	Jobs   []JobConfig `yaml:"jobs"`
 }
 
 func LoadFromYAML[T any](path string) (*T, error) {
