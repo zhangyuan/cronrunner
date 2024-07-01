@@ -58,10 +58,25 @@ func Invoke(configPath string, bindAddress string) error {
 		if _, err := c.AddFunc(job.Spec, func() {
 			jobRunTotal.Inc()
 
-			if err := Run(logBaseDir, job); err != nil {
+			var jobRunErr error
+			jobRunCounter := 0
+
+			for {
+				if jobRunCounter > job.Retry {
+					break
+				}
+				jobRunCounter++
+
+				jobRunErr = Run(logBaseDir, job)
+				if jobRunErr == nil {
+					break
+				}
+			}
+
+			if jobRunErr != nil {
 				jobRunFailed.Inc()
 				job.JobRunCountFailed += 1
-				tracerr.PrintSourceColor(err)
+				tracerr.PrintSourceColor(jobRunErr)
 			} else {
 				jobRunSucceeded.Inc()
 				job.JobRunCountSucceeded += 1

@@ -27,6 +27,7 @@ type Job struct {
 	Env                  []string
 	JobRunCountSucceeded int
 	JobRunCountFailed    int
+	Retry                int
 }
 
 func NewJob(conf *conf.JobConfig) *Job {
@@ -36,6 +37,7 @@ func NewJob(conf *conf.JobConfig) *Job {
 		WorkingDir: conf.WorkingDir,
 		Spec:       conf.Spec,
 		Env:        conf.Env,
+		Retry:      conf.Retry,
 	}
 }
 

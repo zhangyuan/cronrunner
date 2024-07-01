@@ -12,6 +12,7 @@ type JobConfig struct {
 	WorkingDir string   `yaml:"working_dir"`
 	Spec       string   `yaml:"spec"`
 	Env        []string `yaml:"env"`
+	Retry      int      `yaml:"retry"`
 }
 
 type Configuration struct {
