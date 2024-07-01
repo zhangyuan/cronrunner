@@ -11,7 +11,7 @@ var serveCmd = &cobra.Command{
 	Use:   "serve",
 	Short: "Run the server",
 	Run: func(cmd *cobra.Command, args []string) {
-		if err := serve.Invoke("./config.yaml", bindAddress); err != nil {
+		if err := serve.Invoke(confPath, bindAddress); err != nil {
 			log.Fatalln(err)
 		}
 	},
